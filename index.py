@@ -18,7 +18,7 @@ load_dotenv()
 ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
 ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
-BUCKET_NAME = "nt-tutor-ducuments"  
+BUCKET_NAME = os.getenv("BUCKET_NAME")  
 R2_ENDPOINT_URL = f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com"
 
 
