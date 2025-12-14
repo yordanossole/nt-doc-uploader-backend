@@ -7,6 +7,7 @@ import os
 import boto3
 import io
 
+from PyPDF2 import PdfMerger, PdfReader
 from PIL import Image 
 from dotenv import load_dotenv
 from pathlib import Path
@@ -64,6 +65,32 @@ def upload_pdf_to_r2(file_name, pdf_buffer, bucket_name):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
+def merge_pdfs(all_pdf_buffer):
+    merger = PdfMerger()
+
+    for pdf_buffer in all_pdf_buffer:
+        try:
+            pdf_buffer.seek(0)
+            buffer_content = pdf_buffer.read()
+            # pdf_reader = PdfReader(pdf_buffer)
+            merger.append(io.BytesIO(buffer_content))
+        except Exception as e:
+            print(f"Error appending pdfs: {e}")
+            
+
+    output_pdf_buffer = io.BytesIO() 
+    try:
+        merger.write(output_pdf_buffer)
+        output_pdf_buffer.seek(0)
+        print("Successfully merged all PDFs into a single buffer.")
+        return output_pdf_buffer
+    except Exception as e:
+        print(f"Error while merging: {e}")
+        
+    finally:
+        merger.close()
+
+
 # Endpoint
 app = FastAPI()
 
@@ -91,26 +118,44 @@ async def upload_documents(
         "grade_report": gradereport,
         "degree": degree
     }
+
+    sanitized_fullname = fullname.replace(' ', '_').lower()
+    all_pdf_buffer = []
     uploaded_file_info = []
     try:
         for file_name, file in file_fields.items():
             if file.filename is None or not file.filename:
                 raise ValueError(f"No filename provided for {file_name}")
             
-            sanitized_fullname = fullname.replace(' ', '_').lower()
-            # file_extension = os.path.splitext(file.filename)[1]
             final_file_name = f"{sanitized_fullname}_{file_name}"
 
             image_content = await file.read()
             image_bytes_io = io.BytesIO(image_content)
 
             pdf_buffer = image_to_pdf(image_bytes_io)
+            
+            pdf_buffer.seek(0) # type: ignore
+            copy_pdf_buffer = io.BytesIO(pdf_buffer.read()) # type: ignore
+            pdf_buffer.seek(0) # type: ignore
+
+            all_pdf_buffer.append(copy_pdf_buffer)
 
             upload_pdf_to_r2(final_file_name, pdf_buffer, BUCKET_NAME)
             uploaded_file_info.append({
                 "field": file_name,
                 "saved_as": f"{final_file_name}.pdf"
             })
+
+        
+        merged_pdfs = merge_pdfs(all_pdf_buffer)
+        new_merged_pdf_file_name = f"{sanitized_fullname}_doc_report"
+
+        upload_pdf_to_r2(new_merged_pdf_file_name, merged_pdfs, BUCKET_NAME)
+        uploaded_file_info.append({
+                "field": "document_report",
+                "saved_as": f"{new_merged_pdf_file_name}.pdf"
+            })
+
         print(uploaded_file_info)
         return JSONResponse(
             status_code=200,
