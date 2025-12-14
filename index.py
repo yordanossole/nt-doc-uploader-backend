@@ -5,6 +5,8 @@ from typing import Annotated
 
 import os
 import boto3
+import telegram
+import asyncio
 import io
 
 from PyPDF2 import PdfMerger, PdfReader
@@ -21,6 +23,9 @@ ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
 SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 BUCKET_NAME = os.getenv("BUCKET_NAME")  
 R2_ENDPOINT_URL = f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID")
 
 
 def image_to_pdf(image_obj):
@@ -90,6 +95,22 @@ def merge_pdfs(all_pdf_buffer):
     finally:
         merger.close()
 
+async def send_merged_pdf_bot(pdf_buffer, filename, caption=""):
+    bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+
+    try:
+        async with bot:
+            pdf_buffer.seek(0)
+            await bot.send_document(
+                chat_id=TELEGRAM_GROUP_CHAT_ID,
+                document=pdf_buffer,
+                filename=f"{filename}.pdf",
+                caption=caption
+            )
+            print("PDF sent successfully.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 
 # Endpoint
 app = FastAPI()
@@ -150,11 +171,18 @@ async def upload_documents(
         merged_pdfs = merge_pdfs(all_pdf_buffer)
         new_merged_pdf_file_name = f"{sanitized_fullname}_doc_report"
 
+        merged_pdfs.seek(0) # type: ignore
+        copy_merged_pdfs = io.BytesIO(merged_pdfs.read()) # type: ignore
+        merged_pdfs.seek(0) # type: ignore
+
         upload_pdf_to_r2(new_merged_pdf_file_name, merged_pdfs, BUCKET_NAME)
         uploaded_file_info.append({
                 "field": "document_report",
                 "saved_as": f"{new_merged_pdf_file_name}.pdf"
             })
+        
+        # send to telegram
+        await send_merged_pdf_bot(copy_merged_pdfs, new_merged_pdf_file_name, fullname)
 
         print(uploaded_file_info)
         return JSONResponse(
