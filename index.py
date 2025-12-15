@@ -1,18 +1,16 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Annotated
+from typing import Annotated, Optional
 
 import os
 import boto3
 import telegram
-import asyncio
 import io
 
-from PyPDF2 import PdfMerger, PdfReader
+from PyPDF2 import PdfMerger
 from PIL import Image 
 from dotenv import load_dotenv
-from pathlib import Path
 from botocore.exceptions import ClientError
 
 
@@ -130,7 +128,7 @@ async def upload_documents(
     entrance: Annotated[UploadFile, File()],
     transcript: Annotated[UploadFile, File()],
     gradereport: Annotated[UploadFile, File()],
-    degree: Annotated[UploadFile, File()]
+    degree: Annotated[Optional[UploadFile], File()]
 ):
     file_fields = {
         "id_card": id_card,
@@ -145,8 +143,11 @@ async def upload_documents(
     uploaded_file_info = []
     try:
         for file_name, file in file_fields.items():
-            if file.filename is None or not file.filename:
-                raise ValueError(f"No filename provided for {file_name}")
+            if file is None:
+                continue
+
+            if not file.filename:
+                continue
             
             final_file_name = f"{sanitized_fullname}_{file_name}"
 
