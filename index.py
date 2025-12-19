@@ -1,7 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Annotated, Optional
+from typing import Annotated, Optional, List
 
 import os
 import boto3
@@ -12,6 +12,7 @@ from PyPDF2 import PdfMerger
 from PIL import Image 
 from dotenv import load_dotenv
 from botocore.exceptions import ClientError
+from telegram.request import HTTPXRequest
 
 
 load_dotenv()
@@ -22,8 +23,8 @@ SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 BUCKET_NAME = os.getenv("BUCKET_NAME")  
 R2_ENDPOINT_URL = f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com"
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "")
 
 
 def image_to_pdf(image_obj):
@@ -94,7 +95,13 @@ def merge_pdfs(all_pdf_buffer):
         merger.close()
 
 async def send_merged_pdf_bot(pdf_buffer, filename, caption=""):
-    bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+    request = HTTPXRequest(
+        connect_timeout=30,
+        read_timeout=120,
+        write_timeout=120,
+        pool_timeout=30,
+    )
+    bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN, request=request)
 
     try:
         async with bot:
@@ -127,14 +134,14 @@ async def upload_documents(
     id_card: Annotated[UploadFile, File()],
     entrance: Annotated[UploadFile, File()],
     transcript: Annotated[UploadFile, File()],
-    gradereport: Annotated[UploadFile, File()],
+    gradereports: Annotated[List[UploadFile], File()],
     degree: Annotated[Optional[UploadFile], File()]
 ):
     file_fields = {
         "id_card": id_card,
         "entrance_exam": entrance,
         "transcript": transcript,
-        "grade_report": gradereport,
+        "grade_report": gradereports,
         "degree": degree
     }
 
@@ -146,10 +153,34 @@ async def upload_documents(
             if file is None:
                 continue
 
-            if not file.filename:
+            if not isinstance(file, List) and not file.filename:
                 continue
             
             final_file_name = f"{sanitized_fullname}_{file_name}"
+
+            if file_name == "grade_report":
+                grade_report_pdf_list = []
+                for g_report in gradereports:
+                    image_content = await g_report.read()
+                    image_bytes_io = io.BytesIO(image_content)
+                    pdf_buffer = image_to_pdf(image_bytes_io)
+                    pdf_buffer.seek(0) # type: ignore
+                    grade_report_pdf_list.append(pdf_buffer)
+                merged_grade_report = merge_pdfs(grade_report_pdf_list)
+
+                merged_grade_report.seek(0) # type: ignore
+                copy_merged_pdfs = io.BytesIO(merged_grade_report.read()) # type: ignore
+                merged_grade_report.seek(0) # type: ignore
+
+                all_pdf_buffer.append(copy_merged_pdfs)
+
+                upload_pdf_to_r2(final_file_name, merged_grade_report, BUCKET_NAME)
+                uploaded_file_info.append({
+                        "field": "grade_report",
+                        "saved_as": f"{final_file_name}.pdf"
+                    })
+                continue
+                
 
             image_content = await file.read()
             image_bytes_io = io.BytesIO(image_content)
